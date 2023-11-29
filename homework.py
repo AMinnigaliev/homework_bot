@@ -2,14 +2,18 @@ import logging
 import os
 import sys
 import time
+from http import HTTPStatus
 from logging.handlers import RotatingFileHandler
 
 import requests
 import telegram
 from dotenv import load_dotenv
-from requests import RequestException
 
-from exceptions import AbsenceEnvException, InvalidResponseException
+from exceptions import (
+    InvalidResponseException,
+    RequestExceptionForTests,
+    StatusCodeNot200Exception,
+)
 
 load_dotenv()
 
@@ -50,11 +54,10 @@ def check_tokens():
     """
     if not (PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         logger.critical(
-            'Отсутствует одна или более из обязательных переменных окружения!',
-            exc_info=True,
+            'Отсутствует одна или более из обязательных переменных окружения!'
         )
-        raise AbsenceEnvException(
-            'Отсутствует одна или более из обязательных переменных окружения'
+        sys.exit(
+            'Отсутствует одна или более из обязательных переменных окружения!'
         )
 
 
@@ -64,11 +67,14 @@ def send_message(bot, message):
     Чат определяется переменной окружения TELEGRAM_CHAT_ID. Принимает на вход
     два параметра: экземпляр класса Bot и строку с текстом сообщения.
     """
+    global sended
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.debug(f'В телегу отправлено сообщение: {message}')
-    except Exception as error:
+        sended = True
+    except telegram.error.TelegramError as error:
         logger.error(error, exc_info=True)
+        sended = False
 
 
 def get_api_answer(timestamp):
@@ -81,17 +87,27 @@ def get_api_answer(timestamp):
     payload = {'from_date': timestamp}
     try:
         homeworks = requests.get(
-            ENDPOINT, headers=HEADERS, params=payload
+            ENDPOINT, headers=HEADERS, params=payload,
         )
-    except RequestException as error:
+        status = homeworks.status_code
+        if status == HTTPStatus.OK:
+            return homeworks.json()
+        raise StatusCodeNot200Exception(f'Код ответа API: {status}!')
+    except AttributeError as error:
         logger.error(error, exc_info=True)
-
-    status = homeworks.status_code
-    if status == 200:
-        return homeworks.json()
-    else:
-        logger.error('Запрос к API прошёл неудачно!')
-        raise RequestException('Запрос к API прошёл неудачно.')
+        raise AttributeError('Переданный API объект не имеет атрибута "json"!')
+    except ValueError as error:
+        logger.error(error, exc_info=True)
+        raise ValueError('Hе удастся десериализовать JSON!')
+    except StatusCodeNot200Exception as error:
+        logger.error(error, exc_info=True)
+        raise
+    except requests.RequestException as error:
+        logger.error(error, exc_info=True)
+        raise RequestExceptionForTests('Запрос к API прошёл неудачно!')
+    except Exception as error:
+        logger.error(error, exc_info=True)
+        raise
 
 
 def check_response(response):
@@ -101,20 +117,18 @@ def check_response(response):
     Практикум.Домашка. В качестве параметра функция получает ответ API,
     приведенный к типам данных Python.
     """
-    if type(response) is not dict:
-        raise TypeError(
-            'В ответе API структура данных не соответствует ожиданиям.'
-        )
+    if not isinstance(response, dict):
+        message = 'В ответе API структура данных не соответствует ожиданиям.'
+        logger.error(message)
+        raise TypeError(message)
     if 'homeworks' not in response:
-        logger.error('Отсутствие ожидаемого ключа в ответе API!')
-        raise InvalidResponseException(
-            'Отсутствие ожидаемого ключа в ответе API.'
-        )
-    if type(response['homeworks']) is not list:
-        raise TypeError(
-            'В ответе API под ключом `homeworks` данные пришли не в виде'
-            ' списка.'
-        )
+        message = 'Отсутствие ожидаемого ключа в ответе API!'
+        logger.error(message)
+        raise InvalidResponseException(message)
+    if not isinstance(response['homeworks'], list):
+        message = 'В ответе API под ключом `homeworks` не список'
+        logger.error(message)
+        raise TypeError(message)
 
 
 def parse_status(homework):
@@ -137,14 +151,19 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
+    global correct_data, sended
+
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time()) - RETRY_PERIOD
 
     error_message = ''
+    correct_data = True
+    sended = True
 
     while True:
-        start = int(time.time())
+        if correct_data and sended:
+            start = int(time.time())
 
         try:
             homeworks = get_api_answer(timestamp)
@@ -154,8 +173,10 @@ def main():
             else:
                 for homework in homeworks['homeworks']:
                     message = parse_status(homework)
+                    correct_data = True
                     send_message(bot, message)
         except Exception as error:
+            correct_data = False
             message = f'Сбой в работе программы: {error}'
             if error_message != message:
                 send_message(bot, message)
