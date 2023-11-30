@@ -8,3 +8,7 @@ class StatusCodeNot200Exception(Exception):
 
 class RequestExceptionForTests(Exception):
     pass
+
+
+class SendMessageException(Exception):
+    pass

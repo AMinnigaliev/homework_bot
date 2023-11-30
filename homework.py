@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from exceptions import (
     InvalidResponseException,
     RequestExceptionForTests,
+    SendMessageException,
     StatusCodeNot200Exception,
 )
 
@@ -56,9 +57,8 @@ def check_tokens():
         logger.critical(
             'Отсутствует одна или более из обязательных переменных окружения!'
         )
-        sys.exit(
-            'Отсутствует одна или более из обязательных переменных окружения!'
-        )
+        return False
+    return True
 
 
 def send_message(bot, message):
@@ -67,14 +67,12 @@ def send_message(bot, message):
     Чат определяется переменной окружения TELEGRAM_CHAT_ID. Принимает на вход
     два параметра: экземпляр класса Bot и строку с текстом сообщения.
     """
-    global sended
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.debug(f'В телегу отправлено сообщение: {message}')
-        sended = True
     except telegram.error.TelegramError as error:
         logger.error(error, exc_info=True)
-        sended = False
+        raise SendMessageException('Сбой отправки сообщения!')
 
 
 def get_api_answer(timestamp):
@@ -90,9 +88,9 @@ def get_api_answer(timestamp):
             ENDPOINT, headers=HEADERS, params=payload,
         )
         status = homeworks.status_code
-        if status == HTTPStatus.OK:
-            return homeworks.json()
-        raise StatusCodeNot200Exception(f'Код ответа API: {status}!')
+        if status != HTTPStatus.OK:
+            raise StatusCodeNot200Exception(f'Код ответа API: {status}!')
+        return homeworks.json()
     except AttributeError as error:
         logger.error(error, exc_info=True)
         raise AttributeError('Переданный API объект не имеет атрибута "json"!')
@@ -101,13 +99,13 @@ def get_api_answer(timestamp):
         raise ValueError('Hе удастся десериализовать JSON!')
     except StatusCodeNot200Exception as error:
         logger.error(error, exc_info=True)
-        raise
+        raise StatusCodeNot200Exception(f'Код ответа API: {status}!')
     except requests.RequestException as error:
         logger.error(error, exc_info=True)
         raise RequestExceptionForTests('Запрос к API прошёл неудачно!')
     except Exception as error:
         logger.error(error, exc_info=True)
-        raise
+        raise Exception('В get_api_answer возникло неожиданное исключение!')
 
 
 def check_response(response):
@@ -151,18 +149,18 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    global correct_data, sended
-
-    check_tokens()
+    if not check_tokens():
+        sys.exit(
+            'Отсутствует одна или более из обязательных переменных окружения!'
+        )
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time()) - RETRY_PERIOD
 
     error_message = ''
-    correct_data = True
-    sended = True
+    message_sent = True
 
     while True:
-        if correct_data and sended:
+        if message_sent:
             start = int(time.time())
 
         try:
@@ -173,14 +171,15 @@ def main():
             else:
                 for homework in homeworks['homeworks']:
                     message = parse_status(homework)
-                    correct_data = True
                     send_message(bot, message)
+                    message_sent = True
         except Exception as error:
-            correct_data = False
-            message = f'Сбой в работе программы: {error}'
-            if error_message != message:
-                send_message(bot, message)
-                error_message = message
+            message_sent = False
+            if type(error) is not SendMessageException:
+                message = f'Сбой в работе программы: {error}'
+                if error_message != message:
+                    send_message(bot, message)
+                    error_message = message
 
         timestamp = start
         time.sleep(RETRY_PERIOD)
