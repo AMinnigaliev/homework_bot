@@ -173,13 +173,14 @@ def main():
                     message = parse_status(homework)
                     send_message(bot, message)
                     message_sent = True
+        except SendMessageException:
+            message_sent = False
         except Exception as error:
             message_sent = False
-            if type(error) is not SendMessageException:
-                message = f'Сбой в работе программы: {error}'
-                if error_message != message:
-                    send_message(bot, message)
-                    error_message = message
+            message = f'Сбой в работе программы: {error}'
+            if error_message != message:
+                send_message(bot, message)
+                error_message = message
 
         timestamp = start
         time.sleep(RETRY_PERIOD)
