@@ -16,6 +16,7 @@ homework_bot - python telegram bot.
 ## Как запустить бота
 
 1. В директории проекта создать файл ***.env*** с переменными PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
-2. Запустить ***homework.py***
+2. Установить зависимости из ***requirements.txt***
+3. Запустить ***homework.py***
 
 Автор Миннигалиев А.А.
